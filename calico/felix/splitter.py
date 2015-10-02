@@ -109,7 +109,12 @@ class UpdateSplitter(Actor):
         Called from a separate greenlet, asks the managers to clean up
         unused ipsets and iptables.
         """
-        self._cleanup_scheduled = False
+        # FIXME Disable all but the first cleanup for now
+        # [SMC] Works around the queue getting backed up if we're under such
+        # heavy load that we start resyncing.  Hunch is that the blocking calls
+        # result in this actor getting multiple snapshots in its queue and it
+        # gets worse from there.
+        #self._cleanup_scheduled = False
         _log.info("Triggering a cleanup of orphaned ipsets/chains")
         # Need to clean up iptables first because they reference ipsets
         # and force them to stay alive.
