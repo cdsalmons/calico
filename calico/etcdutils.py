@@ -1,13 +1,18 @@
 # Copyright (c) Metaswitch Networks 2015. All rights reserved.
+from httplib import HTTPException
 
 import logging
 import re
 import etcd
 from etcd import EtcdConnectionFailed
 from socket import timeout as SocketTimeout
+import socket
 import time
 
+import ijson.backends.yajl2 as ijson
+
 from urllib3 import Timeout
+import urllib3
 from urllib3.exceptions import ReadTimeoutError
 from calico.logutils import logging_exceptions
 from calico.datamodel_v1 import READY_KEY
@@ -207,11 +212,29 @@ class EtcdWatcher(EtcdClientOwner):
 
         :return: The etcd response object.
         """
-        initial_dump = self.client.read(self.key_to_poll, recursive=True)
+        try:
+            key = self.client._sanitize_key(self.key_to_poll)
+            response = self.client.http.request(
+                "GET",
+                self.client._base_uri + self.client.key_endpoint + key,
+                fields={
+                    "recursive": "true"
+                },
+                redirect=self.client.allow_redirect,
+                preload_content=False
+            )
+            etcd_index = int(response.getheader('x-etcd-index', 1))
+            initial_dump = StreamedEtcdResponse(response)
+        except (urllib3.exceptions.HTTPError,
+                HTTPException,
+                socket.error) as e:
+            _log.error("Request to etcd failed: %r", e)
+            raise etcd.EtcdConnectionFailed(
+                "Connection to etcd failed due to %r" % e, cause=e)
 
         # The etcd_index is the high-water-mark for the snapshot, record that
         # we want to poll starting at the next index.
-        self.next_etcd_index = initial_dump.etcd_index + 1
+        self.next_etcd_index = etcd_index + 1
         return initial_dump
 
     def wait_for_etcd_event(self):
@@ -308,6 +331,49 @@ class EtcdWatcher(EtcdClientOwner):
         :param etcd_snapshot_response: Etcd response containing a complete dump.
         """
         pass
+
+
+class StreamedEtcdResponse(object):
+    def __init__(self, response):
+        self.response = response
+
+    @property
+    def children(self):
+        try:
+            parser = ijson.parse(self.response)  # urllib3 response is file-like.
+            stack = []
+            frame = {}
+            for prefix, event, value in parser:
+                if event == "start_map":
+                    stack.append(frame)
+                    frame = {}
+                elif event == "map_key":
+                    frame["current_key"] = value
+                elif event == "string":
+                    frame[frame["current_key"]] = value
+                    del frame["current_key"]
+                    if "key" in frame and "value" in frame:
+                        yield Node(frame["key"], frame["value"])
+                elif event == "end_map":
+                    frame = stack.pop(-1)
+        except (urllib3.exceptions.HTTPError,
+                HTTPException,
+                socket.error) as e:
+            _log.error("Request to etcd failed: %r", e)
+            raise etcd.EtcdConnectionFailed(
+                "Connection to etcd failed due to %r" % e, cause=e)
+
+    @property
+    def leaves(self):
+        return self.children
+
+class Node(object):
+    __slots__ = ("key", "value", "action")
+
+    def __init__(self, key, value, action=None):
+        self.key = key
+        self.value = value
+        self.action = action
 
 
 class ResyncRequired(Exception):
