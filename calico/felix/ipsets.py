@@ -142,10 +142,18 @@ class IpsetManager(ReferenceManager):
         missing_endpoints = set(self.endpoint_data_by_ep_id.keys())
         for endpoint_id, endpoint in endpoints_by_id.iteritems():
             assert endpoint is not None
+            missing_endpoints.discard(endpoint_id)
+            endpoint_data = self.endpoint_data_by_ep_id.get(endpoint_id)
+            if endpoint_data:
+                profile_ids = set(endpoint.get("profile_ids", []))
+                nets_list = endpoint.get(self.nets_key, [])
+                ips = set(map(futils.net_to_ip, nets_list))
+                if (profile_ids == endpoint_data.profile_ids and
+                        ips == endpoint_data.ip_addresses):
+                    continue
             endpoint_data = self._endpoint_data_from_dict(endpoint_id,
                                                           endpoint)
             self._on_endpoint_data_update(endpoint_id, endpoint_data)
-            missing_endpoints.discard(endpoint_id)
             self._maybe_yield()
         for endpoint_id in missing_endpoints:
             self._on_endpoint_data_update(endpoint_id, EMPTY_ENDPOINT_DATA)
