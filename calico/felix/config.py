@@ -441,7 +441,7 @@ class Config(object):
             if parameter.value is None:
                 # No value, not even a default
                 raise ConfigException("Missing undefaulted value",
-                                      self.parameters["InterfacePrefix"])
+                                      name)
 
     def _warn_unused_cfg(self, cfg_dict, source):
         # Warn about any unexpected items - i.e. ones we have not used.
